@@ -17,4 +17,6 @@
     GPUImageHSBFilter *hsbFilter;
 }
 
+- (id)initWithBeta:(CGFloat)beta intensity:(CGFloat)intensity;
+
 @end

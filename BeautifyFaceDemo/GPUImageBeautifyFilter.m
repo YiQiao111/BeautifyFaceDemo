@@ -14,7 +14,8 @@
     GLint smoothDegreeUniform;
 }
 
-@property (nonatomic, assign) CGFloat intensity;
+@property (nonatomic) CGFloat beta;
+@property (nonatomic) CGFloat intensity;
 
 @end
 
@@ -53,11 +54,41 @@ NSString *const kGPUImageBeautifyFragmentShaderString = SHADER_STRING
 
 @implementation GPUImageCombinationFilter
 
-- (id)init {
-    if (self = [super initWithFragmentShaderFromString:kGPUImageBeautifyFragmentShaderString]) {
++ (NSString *)shaderStringWithBeta:(CGFloat)beta {
+    return [NSString stringWithFormat:@" varying highp vec2 textureCoordinate;\
+            varying highp vec2 textureCoordinate2;\
+            varying highp vec2 textureCoordinate3;\
+            uniform sampler2D inputImageTexture;\
+            uniform sampler2D inputImageTexture2;\
+            uniform sampler2D inputImageTexture3;\
+            uniform mediump float smoothDegree;\
+            void main()\
+            {\
+                highp vec4 bilateral = texture2D(inputImageTexture, textureCoordinate);\
+                highp vec4 canny = texture2D(inputImageTexture2, textureCoordinate2);\
+                highp vec4 origin = texture2D(inputImageTexture3,textureCoordinate3);\
+                highp vec4 smooth;\
+                lowp float r = origin.r;\
+                lowp float g = origin.g;\
+                lowp float b = origin.b;\
+                if (canny.r < 0.2 && r > 0.3725 && g > 0.1568 && b > 0.0784 && r > b && (max(max(r, g), b) - min(min(r, g), b)) > 0.0588 && abs(r-g) > 0.0588) {\
+                    smooth = (1.0 - smoothDegree) * (origin - bilateral) + bilateral;\
+                }\
+                else {\
+                    smooth = origin;\
+                }\
+                smooth.r = log(1.0 + %f * smooth.r)/log(%f);\
+                smooth.g = log(1.0 + %f * smooth.g)/log(%f);\
+                smooth.b = log(1.0 + %f * smooth.b)/log(%f);\
+                gl_FragColor = smooth;\
+            }", beta - 1, beta, beta - 1, beta, beta - 1, beta];
+}
+
+- (id)initWithBeta:(CGFloat)beta intensity:(CGFloat)intensity {
+    if (self = [super initWithFragmentShaderFromString:[GPUImageCombinationFilter shaderStringWithBeta:beta]]) {
         smoothDegreeUniform = [filterProgram uniformIndex:@"smoothDegree"];
     }
-    self.intensity = 0.5;
+    self.intensity = intensity;
     return self;
 }
 
@@ -69,6 +100,41 @@ NSString *const kGPUImageBeautifyFragmentShaderString = SHADER_STRING
 @end
 
 @implementation GPUImageBeautifyFilter
+
+- (id)initWithBeta:(CGFloat)beta intensity:(CGFloat)intensity {
+    if (!(self = [super init]))
+    {
+        return nil;
+    }
+
+    // First pass: face smoothing filter
+    bilateralFilter = [[GPUImageBilateralFilter alloc] init];
+    bilateralFilter.distanceNormalizationFactor = 4.0;
+    [self addFilter:bilateralFilter];
+
+    // Second pass: edge detection
+    cannyEdgeFilter = [[GPUImageCannyEdgeDetectionFilter alloc] init];
+    [self addFilter:cannyEdgeFilter];
+
+    // Third pass: combination bilateral, edge detection and origin
+    combinationFilter = [[GPUImageCombinationFilter alloc] initWithBeta:beta intensity:intensity];
+    [self addFilter:combinationFilter];
+
+    // Adjust HSB
+    hsbFilter = [[GPUImageHSBFilter alloc] init];
+    [hsbFilter adjustBrightness:1.1];
+    [hsbFilter adjustSaturation:1.1];
+
+    [bilateralFilter addTarget:combinationFilter];
+    [cannyEdgeFilter addTarget:combinationFilter];
+
+    [combinationFilter addTarget:hsbFilter];
+
+    self.initialFilters = [NSArray arrayWithObjects:bilateralFilter,cannyEdgeFilter,combinationFilter,nil];
+    self.terminalFilter = hsbFilter;
+
+    return self;
+}
 
 - (id)init;
 {
